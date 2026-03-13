@@ -50,22 +50,30 @@ function findBestMatch(results, name) {
 }
 
 function handleConsumetResponse(endpoint, parameter) {
-  const results = useQuery(`${endpoint}${parameter}`, async () => {
-    if (!parameter) {
-      return undefined;
-    }
-
-    let lastError = null;
-    for (const baseUrl of BASE_URLS) {
-      try {
-        return await axios.get(`${baseUrl}${endpoint}${parameter}`);
-      } catch (error) {
-        lastError = error;
+  const results = useQuery(
+    `${endpoint}${parameter}`,
+    async () => {
+      if (!parameter) {
+        return undefined;
       }
-    }
 
-    throw lastError;
-  });
+      let lastError = null;
+      for (const baseUrl of BASE_URLS) {
+        try {
+          return await axios.get(`${baseUrl}${endpoint}${parameter}`);
+        } catch (error) {
+          lastError = error;
+        }
+      }
+
+      throw lastError;
+    },
+    {
+      retry: false,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+    }
+  );
 
   if (!parameter) {
     return { isLoading: true };

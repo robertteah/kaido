@@ -36,6 +36,20 @@ function getSubOrDub(value) {
     : SubOrSub.SUB;
 }
 
+function serializeError(error) {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    };
+  }
+
+  return {
+    message: String(error),
+  };
+}
+
 function getPublicOrigin(req) {
   if (process.env.PUBLIC_URL) {
     return process.env.PUBLIC_URL.replace(/\/$/, "");
@@ -102,7 +116,12 @@ app.get("/anime/gogoanime/info/:id", async (req, res) => {
     const data = await animeProvider.fetchAnimeInfo(req.params.id);
     res.json(data);
   } catch (error) {
-    res.status(502).json({ message: "info failed", error: String(error) });
+    const details = serializeError(error);
+    console.error("Consumet info failed", {
+      id: req.params.id,
+      details,
+    });
+    res.status(502).json({ message: "info failed", details });
   }
 });
 
@@ -120,7 +139,13 @@ app.get("/anime/gogoanime/servers/:episodeId", async (req, res) => {
       }))
     );
   } catch (error) {
-    res.status(502).json({ message: "servers failed", error: String(error) });
+    const details = serializeError(error);
+    console.error("Consumet servers failed", {
+      episodeId: req.params.episodeId,
+      subOrDub: req.query.subOrDub,
+      details,
+    });
+    res.status(502).json({ message: "servers failed", details });
   }
 });
 
@@ -144,7 +169,14 @@ app.get("/anime/gogoanime/watch/:episodeId", async (req, res) => {
       })),
     });
   } catch (error) {
-    res.status(502).json({ message: "watch failed", error: String(error) });
+    const details = serializeError(error);
+    console.error("Consumet watch failed", {
+      episodeId: req.params.episodeId,
+      server: req.query.server,
+      subOrDub: req.query.subOrDub,
+      details,
+    });
+    res.status(502).json({ message: "watch failed", details });
   }
 });
 
@@ -182,7 +214,12 @@ app.get("/anime/gogoanime/proxy-stream", async (req, res) => {
     }
     res.send(body);
   } catch (error) {
-    res.status(502).json({ message: "proxy failed", error: String(error) });
+    const details = serializeError(error);
+    console.error("Consumet proxy failed", {
+      url,
+      details,
+    });
+    res.status(502).json({ message: "proxy failed", details });
   }
 });
 
@@ -191,7 +228,12 @@ app.get("/anime/gogoanime/:query", async (req, res) => {
     const data = await animeProvider.search(req.params.query);
     res.json(data);
   } catch (error) {
-    res.status(502).json({ message: "search failed", error: String(error) });
+    const details = serializeError(error);
+    console.error("Consumet search failed", {
+      query: req.params.query,
+      details,
+    });
+    res.status(502).json({ message: "search failed", details });
   }
 });
 

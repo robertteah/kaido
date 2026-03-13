@@ -23,6 +23,7 @@ for (const envPath of [
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
+const host = process.env.HOST || (process.env.PORT ? "0.0.0.0" : "127.0.0.1");
 const animeProvider = new ANIME.AnimeKai();
 const allowedOrigins = String(process.env.FRONTEND_ORIGIN || "")
   .split(",")
@@ -194,6 +195,6 @@ app.get("/anime/gogoanime/:query", async (req, res) => {
   }
 });
 
-app.listen(port, "127.0.0.1", () => {
-  console.log(`Kaido Consumet API listening on http://127.0.0.1:${port}`);
+app.listen(port, host, () => {
+  console.log(`Kaido Consumet API listening on http://${host}:${port}`);
 });

@@ -36,14 +36,79 @@ Welcome to Kaido, your one-stop destination for streaming your favorite anime se
 
 If you want to set up Kaido locally on your machine, follow these steps:
 
-1. Clone the repository:
+1. Clone the repository and install the frontend dependencies:
 
    ```shell
    git clone https://github.com/Manj0tBenipal/kaido.git
    cd kaido
    npm install
+   npm --prefix server install
+   ```
+
+2. Start the self-hosted anime API:
+
+   ```shell
+   npm run api
+   ```
+
+3. In a second terminal, start the frontend:
+
+   ```shell
    npm run dev
-After that you can access Kaido locally by visiting the URL displayed in the shell window
+   ```
+
+Kaido now uses the local anime API at `http://127.0.0.1:3000` by default.
+
+If you want to point the frontend at a deployed backend instead, create a `.env.local` file from `.env.example` and set `VITE_CONSUMET_API_URL` to that backend origin before starting Vite.
+
+For backend-specific local settings, create `server/.env` from [server/.env.example](/Users/robert/kaido/server/.env.example). The backend automatically loads env files from both the repo root and `server/` in local development.
+
+After that you can access Kaido locally by visiting the URL displayed in the shell window.
+
+## Deployment
+
+### Frontend on Vercel
+
+Deploy the repository root to Vercel as a Vite app.
+
+Set this environment variable in Vercel:
+
+```shell
+VITE_CONSUMET_API_URL=https://your-backend-domain.example.com
+```
+
+The SPA rewrite config is already included in [vercel.json](/Users/robert/kaido/vercel.json), so routes like `/watch` and `/details/...` resolve correctly after deployment.
+
+### Backend on Render
+
+This repo includes [render.yaml](/Users/robert/kaido/render.yaml) for the backend service.
+
+Create a Render Blueprint or a new Web Service from this repository and set:
+
+```shell
+FRONTEND_ORIGIN=https://your-vercel-domain.vercel.app
+PUBLIC_URL=https://your-render-service.onrender.com
+```
+
+If you use a custom frontend domain, include that in `FRONTEND_ORIGIN` instead. For multiple frontend origins, use a comma-separated list.
+
+### Backend on Railway
+
+This repo includes [railway.json](/Users/robert/kaido/railway.json) for the backend service.
+
+Deploy the repository to Railway and set:
+
+```shell
+FRONTEND_ORIGIN=https://your-vercel-domain.vercel.app
+PUBLIC_URL=https://your-railway-domain.up.railway.app
+```
+
+Railway will run the backend with:
+
+```shell
+npm install --prefix server
+npm --prefix server start
+```
+
 ## Contributing
 We welcome contributions to improve and enhance Kaido. If you have any bug reports, feature requests, or code contributions, please feel free to open an issue or submit a pull request.
-

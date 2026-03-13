@@ -1,12 +1,53 @@
 import axios from "axios";
 import { useQuery } from "react-query";
-import { servers } from "../api/gogoanime_servers";
 
-const BASE_URLS = [
-  "https://api.consumet.org/anime/gogoanime",
-  "https://consumet-api.vercel.app/anime/gogoanime",
-  "https://consumet.manjotbenipal.xyz/anime/gogoanime",
-];
+const apiOrigin =
+  import.meta.env.VITE_CONSUMET_API_URL?.replace(/\/$/, "") ||
+  "http://127.0.0.1:3000";
+
+const BASE_URLS = [`${apiOrigin}/anime/gogoanime`];
+
+function normalizeText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function findBestMatch(results, name) {
+  const normalizedName = normalizeText(name);
+
+  return [...results].sort((left, right) => {
+    const leftTitles = [
+      left.title,
+      left.japaneseTitle,
+      left.title_english,
+      left.title_romaji,
+    ].map(normalizeText);
+    const rightTitles = [
+      right.title,
+      right.japaneseTitle,
+      right.title_english,
+      right.title_romaji,
+    ].map(normalizeText);
+
+    const score = (titles) => {
+      if (titles.some((title) => title === normalizedName)) {
+        return 3;
+      }
+      if (
+        titles.some(
+          (title) =>
+            title.includes(normalizedName) || normalizedName.includes(title)
+        )
+      ) {
+        return 2;
+      }
+      return 1;
+    };
+
+    return score(rightTitles) - score(leftTitles);
+  })[0];
+}
 
 function handleConsumetResponse(endpoint, parameter) {
   const results = useQuery(`${endpoint}${parameter}`, async () => {
@@ -52,57 +93,22 @@ export function useSearch(name) {
   const searchResults = handleConsumetResponse("/", normalizedName);
   const results = searchResults.data?.results;
 
-  let subAnime, dubAnime;
+  if (!results) {
+    return {
+      isLoading: searchResults.isLoading,
+      isError: searchResults.isError,
+    };
+  }
+
   if (results?.length === 0) {
     return { noAnime: true };
   }
-  /**
-   * if results only contain one item determine wheter its sub or dub
-   */
-  if (results?.length === 1) {
-    if (
-      results[0].id.slice(results[0].id.length - 3, results[0].id.length) ===
-      "dub"
-    ) {
-      dubAnime = results[0];
-    } else {
-      subAnime = results[0];
-    }
-  }
-  if (results?.length > 1) {
-    const suffix_0 = results[0].id.slice(
-      results[0].id.length - 3,
-      results[0].id.length
-    );
-    /**
-     * if results.length is more than one
-     * if the first item is not dub->
-     * then set the subAnime=results[0]
-     *
-     * check if the second item is dub->
-     * if true set the dubAnime=results[1]
-     * else set dubAnime=null
-     *
-     * else check if first item dub->
-     *  if yes set dubAnime=results[0]
-     *  and subAnime=null
-     */
-    if (suffix_0 !== "dub") {
-      subAnime = results[0];
 
-      dubAnime =
-        results.find((el) => el.id === subAnime.id + "-dub") || results[1];
-    } else if (suffix_0 === "dub") {
-      dubAnime = results[0];
-      subAnime = results.find(
-        (el) => el.id === dubAnime.id.slice(0, dubAnime.id.length - 4)
-      );
-    }
-  }
+  const bestMatch = findBestMatch(results, name);
 
   return {
-    dub: dubAnime,
-    sub: subAnime,
+    dub: bestMatch?.dub > 0 ? bestMatch : undefined,
+    sub: bestMatch?.sub > 0 ? bestMatch : undefined,
     isLoading: searchResults.isLoading,
     isError: searchResults.isError,
   };
@@ -114,32 +120,26 @@ export function useAnimeInfo(id) {
     return results.data;
   }
 }
-export function useServers(episodeId) {
-  const results = handleConsumetResponse(`/servers/`, episodeId);
+export function useServers({ episodeId, subOrDub }) {
+  const results = handleConsumetResponse(
+    `/servers/`,
+    episodeId ? `${episodeId}?subOrDub=${subOrDub}` : null
+  );
 
   if (!results.isLoading && results.data) {
-    const usableServers = [];
-
-    for (let i = 0; i < servers.length; i++) {
-      for (let j = 0; j < results.data.length; j++) {
-        if (servers[i].name === results.data[j].name) {
-          usableServers.push({ ...results.data[j], id: servers[i].id });
-        }
-      }
-    }
-
-    return usableServers;
+    return results.data;
   }
 }
 
-export function useEpisodeFiles({ server, id }) {
+export function useEpisodeFiles({ server, id, subOrDub }) {
   const results = handleConsumetResponse(
     "/watch/",
-    server && id ? `${id}?server=${server.id}` : null
+    server && id ? `${id}?server=${encodeURIComponent(server.id)}&subOrDub=${subOrDub}` : null
   );
   if (!results.isLoading && results.data) {
     return {
       sources: results.data.sources,
+      headers: results.data.headers,
       isLoading: results.isLoading,
     };
   } else {

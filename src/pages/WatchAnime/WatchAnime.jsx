@@ -49,13 +49,16 @@ export default function WatchAnime() {
    * fetches servers from the API based on the user's selection of SUB ior DUB
    */
   const servers = useServers(
-    subIsSelected
-      ? subInfo?.episodes?.length > 0
-        ? subInfo.episodes[selectedEpisode].id
-        : null
-      : dubInfo?.episodes?.length > 0
-      ? dubInfo.episodes[selectedEpisode].id
-      : null
+    {
+      episodeId: subIsSelected
+        ? subInfo?.episodes?.length > 0
+          ? subInfo.episodes[selectedEpisode].id
+          : null
+        : dubInfo?.episodes?.length > 0
+        ? dubInfo.episodes[selectedEpisode].id
+        : null,
+      subOrDub: subIsSelected ? "sub" : "dub",
+    }
   );
 
   /**
@@ -76,15 +79,19 @@ export default function WatchAnime() {
    */
   const episodesData = useEpisodeFiles(
     servers && episodeList
-      ? { server: servers[selectedServer], id: episodeList[selectedEpisode].id }
-      : { server: null, id: null }
+      ? {
+          server: servers[selectedServer],
+          id: episodeList[selectedEpisode].id,
+          subOrDub: subIsSelected ? "sub" : "dub",
+        }
+      : { server: null, id: null, subOrDub: "sub" }
   );
 
   /**
    * Creates an array of qualities available for an episode
    */
   const episodeQuality = episodesData?.sources?.map((el) => {
-    return { quality: el.quality, url: el.url };
+    return { quality: el.quality || "auto", url: el.url };
   });
 
   /**
@@ -122,6 +129,11 @@ export default function WatchAnime() {
       setSubIsSelected(false);
     }
   }, [subInfo, dubInfo]);
+
+  useEffect(() => {
+    setSelectedServer(0);
+    setQuality("auto");
+  }, [selectedEpisode, subIsSelected]);
 
   // Server and episode buttons to change the respective item
   const serverButtons = servers?.map((el, idx) => {
@@ -193,6 +205,7 @@ export default function WatchAnime() {
                     url={
                       episodeQuality?.find((el) => el.quality === quality)?.url
                     }
+                    headers={episodesData?.headers}
                   />
                 ) : (
                   <div

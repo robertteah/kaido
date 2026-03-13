@@ -1,18 +1,35 @@
 import axios from "axios";
 import { useQuery } from "react-query";
 import { servers } from "../api/gogoanime_servers";
+
+const BASE_URLS = [
+  "https://api.consumet.org/anime/gogoanime",
+  "https://consumet-api.vercel.app/anime/gogoanime",
+  "https://consumet.manjotbenipal.xyz/anime/gogoanime",
+];
+
 function handleConsumetResponse(endpoint, parameter) {
-  const BASE_URL = `https://consumet.manjotbenipal.xyz/anime/gogoanime`;
   const results = useQuery(`${endpoint}${parameter}`, async () => {
-    if (parameter) {
-      return await axios
-        .get(`${BASE_URL}${endpoint}${parameter}`)
-        .catch((err) => console.log(err));
+    if (!parameter) {
+      return undefined;
     }
+
+    let lastError = null;
+    for (const baseUrl of BASE_URLS) {
+      try {
+        return await axios.get(`${baseUrl}${endpoint}${parameter}`);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    throw lastError;
   });
+
   if (!parameter) {
     return { isLoading: true };
   }
+
   return {
     isLoading: results.isLoading,
     isError: results.isError,
@@ -27,8 +44,12 @@ function handleConsumetResponse(endpoint, parameter) {
  */
 
 export function useSearch(name) {
-  const searchResults = handleConsumetResponse("/", name.toLowerCase());
-  console.log(name.toLowerCase());
+  if (!name) {
+    return { isLoading: true };
+  }
+
+  const normalizedName = encodeURIComponent(name.toLowerCase());
+  const searchResults = handleConsumetResponse("/", normalizedName);
   const results = searchResults.data?.results;
 
   let subAnime, dubAnime;
@@ -48,7 +69,6 @@ export function useSearch(name) {
       subAnime = results[0];
     }
   }
-  console.log(results);
   if (results?.length > 1) {
     const suffix_0 = results[0].id.slice(
       results[0].id.length - 3,
@@ -75,18 +95,17 @@ export function useSearch(name) {
     } else if (suffix_0 === "dub") {
       dubAnime = results[0];
       subAnime = results.find(
-        (el) => (el.id = dubAnime.id.slice(0, dubAnime.id.length - 4))
+        (el) => el.id === dubAnime.id.slice(0, dubAnime.id.length - 4)
       );
     }
   }
-  if (!searchResults.isLoading) {
-    return {
-      dub: dubAnime,
-      sub: subAnime,
-      isLoading: searchResults.isLoading,
-      isError: searchResults.isError,
-    };
-  }
+
+  return {
+    dub: dubAnime,
+    sub: subAnime,
+    isLoading: searchResults.isLoading,
+    isError: searchResults.isError,
+  };
 }
 
 export function useAnimeInfo(id) {

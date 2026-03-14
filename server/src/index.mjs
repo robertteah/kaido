@@ -370,10 +370,32 @@ async function extractKaidoStream(sourceId) {
     throw new Error("Rapid-cloud embed returned a file-not-found page");
   }
 
-  const streamUrl = extractM3u8Url(embedHtml);
+  const embedId =
+    embedUrl.match(/\/e-1\/([^?/#]+)/)?.[1] ||
+    embedHtml.match(/id="vidcloud-player"[^>]*data-id="([^"]+)"/i)?.[1];
+
+  if (!embedId) {
+    throw new Error("Failed to determine the rapid-cloud embed ID");
+  }
+
+  const sourcesPayload = await fetchJson(
+    `https://rapid-cloud.co/embed-2/v2/e-1/getSources?id=${encodeURIComponent(
+      embedId
+    )}`,
+    {
+      ...streamHeaders,
+      Referer: `${new URL(embedUrl).origin}/`,
+      "X-Requested-With": "XMLHttpRequest",
+      Accept: "application/json, text/plain, */*",
+    }
+  );
+  const streamUrl =
+    sourcesPayload?.sources?.find((source) => source?.file)?.file ||
+    sourcesPayload?.sources?.find((source) => source?.url)?.url ||
+    extractM3u8Url(JSON.stringify(sourcesPayload));
 
   if (!streamUrl) {
-    throw new Error("Failed to locate an m3u8 URL in the rapid-cloud embed");
+    throw new Error("Failed to locate an m3u8 URL in rapid-cloud getSources");
   }
 
   return {
@@ -382,6 +404,9 @@ async function extractKaidoStream(sourceId) {
     embedUrl,
     streamUrl,
     headers: streamHeaders,
+    tracks: sourcesPayload?.tracks || [],
+    intro: sourcesPayload?.intro || null,
+    outro: sourcesPayload?.outro || null,
   };
 }
 

@@ -263,21 +263,19 @@ async function searchKaido(query) {
   };
 }
 
-function parseKaidoEpisodes(html, slugId) {
-  const basePath = `/watch/${slugId}`;
+function parseKaidoEpisodes(html) {
   const matches = [
     ...String(html || "").matchAll(
-      /<a href="([^"]*\/watch\/[^"]+\?ep=(\d+)[^"]*)"[^>]*>\s*<div class="number">(\d+)<\/div>\s*<div class="ep-name[^"]*">([\s\S]*?)<\/div>/g
+      /<a[^>]*class="[^"]*\bep-item\b[^"]*"[^>]*data-number="(\d+)"[^>]*data-id="(\d+)"[^>]*href="([^"]+)"[\s\S]*?<div class="ep-name[^"]*"[^>]*data-jname="([^"]*)"[^>]*title="([^"]*)"[^>]*>([\s\S]*?)<\/div>/g
     ),
   ];
 
   return matches.map((match) => ({
     id: match[2],
-    number: Number(match[3]),
-    title: stripHtml(match[4]),
-    url: match[1].startsWith("http")
-      ? match[1]
-      : `https://kaido.to${match[1]}`,
+    number: Number(match[1]),
+    title: stripHtml(match[6] || match[5]),
+    japaneseTitle: decodeHtmlEntities(match[4] || ""),
+    url: match[3].startsWith("http") ? match[3] : `https://kaido.to${match[3]}`,
   }));
 }
 
@@ -291,6 +289,7 @@ function extractKaidoInfoField(html, label) {
 
 async function fetchKaidoInfo(id) {
   const slugId = normalizeKaidoPath(id);
+  const animeId = slugId.match(/-(\d+)$/)?.[1];
   const watchUrl = `https://kaido.to/watch/${slugId}`;
   const response = await fetch(watchUrl, {
     headers: createRequestHeaders(),
@@ -302,11 +301,11 @@ async function fetchKaidoInfo(id) {
   }
 
   const html = await response.text();
-  const title =
-    stripHtml(
-      html.match(/<h2 class="film-name dynamic-name"[^>]*>([\s\S]*?)<\/h2>/i)?.[1]
-    ) || slugId;
-  const japaneseTitle = extractKaidoInfoField(html, "Japanese");
+  const titleMatch = html.match(
+    /<h2 class="film-name">[\s\S]*?<a [^>]*data-jname="([^"]*)"[^>]*title="([^"]*)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<\/h2>/i
+  );
+  const title = stripHtml(titleMatch?.[3] || titleMatch?.[2] || "") || slugId;
+  const japaneseTitle = decodeHtmlEntities(titleMatch?.[1] || "");
   const description = stripHtml(
     html.match(/<div class="film-description[^"]*">\s*<div class="text">([\s\S]*?)<\/div>/i)?.[1]
   );
@@ -314,7 +313,28 @@ async function fetchKaidoInfo(id) {
     html.match(/<img[^>]*class="film-poster-img"[^>]*src="([^"]+)"/i)?.[1] ||
     html.match(/<img[^>]*src="([^"]+)"[^>]*alt="[^"]*"/i)?.[1] ||
     "";
-  const episodes = parseKaidoEpisodes(html, slugId);
+  let episodes = [];
+
+  if (animeId) {
+    try {
+      const episodeListPayload = await fetchJson(
+        `https://kaido.to/ajax/episode/list/${animeId}`,
+        {
+          Referer: watchUrl,
+          "X-Requested-With": "XMLHttpRequest",
+          Accept: "application/json, text/plain, */*",
+        }
+      );
+      if (episodeListPayload?.status && episodeListPayload?.html) {
+        episodes = parseKaidoEpisodes(episodeListPayload.html);
+      }
+    } catch (error) {
+      console.error("Kaido episode list fallback failed", {
+        id: slugId,
+        details: serializeError(error),
+      });
+    }
+  }
 
   return {
     id: slugId,

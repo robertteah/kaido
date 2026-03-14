@@ -41,7 +41,6 @@ export default function WatchAnime() {
   const [subIsSelected, setSubIsSelected] = useState(true);
   const [subInfo, setSubInfo] = useState({});
   const [dubInfo, setDubInfo] = useState({});
-  const [selectedServer, setSelectedServer] = useState(0);
   const [selectedEpisode, setSelectedEpisode] = useState(0);
   const [quality, setQuality] = useState("default");
 
@@ -78,13 +77,12 @@ export default function WatchAnime() {
    * these sources are then used to play the video and include links to video files of different quality
    */
   const episodesData = useEpisodeFiles(
-    servers && episodeList
+    episodeList
       ? {
-          server: servers[selectedServer],
           id: episodeList[selectedEpisode].id,
           subOrDub: subIsSelected ? "sub" : "dub",
         }
-      : { server: null, id: null, subOrDub: "sub" }
+      : { id: null, subOrDub: "sub" }
   );
 
   /**
@@ -131,17 +129,20 @@ export default function WatchAnime() {
   }, [subInfo, dubInfo]);
 
   useEffect(() => {
-    setSelectedServer(0);
     setQuality("auto");
   }, [selectedEpisode, subIsSelected]);
 
-  // Server and episode buttons to change the respective item
+  // Server availability for the current episode and language
   const serverButtons = servers?.map((el, idx) => {
+    const isResolved =
+      episodesData?.server?.id === el.id ||
+      (episodesData?.server?.name === el.name &&
+        episodesData?.server?.serverId === el.serverId);
+
     return (
       <span
-        className={`server-tile ${selectedServer === idx ? "selected" : ""}`}
-        key={el.name}
-        onClick={() => setSelectedServer(idx)}
+        className={`server-tile ${isResolved ? "selected" : ""}`}
+        key={`${el.type}-${el.id}-${idx}`}
       >
         {el.name}
       </span>
@@ -268,6 +269,14 @@ export default function WatchAnime() {
                       />
                     )}
                   </div>
+                  {episodesData?.server?.name ? (
+                    <div style={{ marginTop: 8 }}>
+                      Using:{" "}
+                      <span className="server-tile selected">
+                        {episodesData.server.name}
+                      </span>
+                    </div>
+                  ) : null}
                   <div>
                     Quality:
                     <select

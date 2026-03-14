@@ -170,6 +170,47 @@ function extractM3u8Url(content) {
   return null;
 }
 
+function stripHtml(value) {
+  return String(value || "").replace(/<[^>]+>/g, "").trim();
+}
+
+function parseKaidoServers(html) {
+  const matches = [
+    ...String(html || "").matchAll(
+      /<div class="item server-item"[^>]*data-type="([^"]+)"[^>]*data-id="([^"]+)"[^>]*data-server-id="([^"]+)"[^>]*>\s*<a [^>]*class="btn">([^<]+)<\/a>/g
+    ),
+  ];
+
+  return matches.map((match) => ({
+    type: match[1],
+    id: match[2],
+    serverId: Number(match[3]),
+    name: stripHtml(match[4]),
+  }));
+}
+
+async function fetchKaidoServers(episodeId) {
+  const url = `https://kaido.to/ajax/episode/servers?episodeId=${encodeURIComponent(
+    episodeId
+  )}`;
+  const payload = await fetchJson(url, {
+    Referer: `https://kaido.to/watch/?ep=${episodeId}`,
+    "X-Requested-With": "XMLHttpRequest",
+    Accept: "application/json, text/plain, */*",
+  });
+
+  if (!payload?.status || !payload?.html) {
+    throw new Error("Kaido server response did not include server HTML");
+  }
+
+  const servers = parseKaidoServers(payload.html);
+  if (!servers.length) {
+    throw new Error("No Kaido servers were found for this episode");
+  }
+
+  return servers;
+}
+
 async function extractKaidoStream(sourceId) {
   const ajaxUrl = `https://kaido.to/ajax/episode/sources?id=${encodeURIComponent(
     sourceId
@@ -207,6 +248,37 @@ async function extractKaidoStream(sourceId) {
     streamUrl,
     headers: streamHeaders,
   };
+}
+
+async function extractKaidoEpisodeStream(episodeId, preferredType) {
+  const servers = await fetchKaidoServers(episodeId);
+  const normalizedType = String(preferredType || "").toLowerCase();
+  const orderedServers = [
+    ...servers.filter((server) => server.type === normalizedType),
+    ...servers.filter((server) => server.type !== normalizedType),
+  ];
+
+  const failures = [];
+
+  for (const server of orderedServers) {
+    try {
+      const extracted = await extractKaidoStream(server.id);
+      return {
+        episodeId,
+        server,
+        ...extracted,
+      };
+    } catch (error) {
+      failures.push({
+        server,
+        details: serializeError(error),
+      });
+    }
+  }
+
+  const error = new Error("All Kaido servers failed for this episode");
+  error.failures = failures;
+  throw error;
 }
 
 app.use(
@@ -385,6 +457,69 @@ app.get("/anime/kaido/watch/:sourceId", async (req, res) => {
       details,
     });
     res.status(502).json({ message: "kaido extractor failed", details });
+  }
+});
+
+app.get("/anime/kaido/servers/:episodeId", async (req, res) => {
+  try {
+    const servers = await fetchKaidoServers(req.params.episodeId);
+    res.json({
+      episodeId: req.params.episodeId,
+      servers,
+    });
+  } catch (error) {
+    const details = serializeError(error);
+    console.error("Kaido servers failed", {
+      episodeId: req.params.episodeId,
+      details,
+    });
+    res.status(502).json({ message: "kaido servers failed", details });
+  }
+});
+
+app.get("/anime/kaido/watch-by-episode/:episodeId", async (req, res) => {
+  try {
+    const extracted = await extractKaidoEpisodeStream(
+      req.params.episodeId,
+      req.query.type
+    );
+    const shouldProxy = String(req.query.proxy || "true").toLowerCase() !== "false";
+    const proxiedUrl = shouldProxy
+      ? buildProxyUrl(
+          req,
+          extracted.streamUrl,
+          extracted.headers.Referer,
+          extracted.headers.Origin
+        )
+      : extracted.streamUrl;
+
+    res.json({
+      episodeId: extracted.episodeId,
+      sourceId: extracted.sourceId,
+      server: extracted.server,
+      embed: extracted.embedUrl,
+      headers: extracted.headers,
+      sources: [
+        {
+          url: proxiedUrl,
+          quality: "auto",
+          isM3U8: true,
+        },
+      ],
+    });
+  } catch (error) {
+    const details = serializeError(error);
+    console.error("Kaido episode extractor failed", {
+      episodeId: req.params.episodeId,
+      type: req.query.type,
+      details,
+      failures: error?.failures,
+    });
+    res.status(502).json({
+      message: "kaido episode extractor failed",
+      details,
+      failures: error?.failures || [],
+    });
   }
 });
 

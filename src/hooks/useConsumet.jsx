@@ -5,7 +5,8 @@ const apiOrigin =
   import.meta.env.VITE_CONSUMET_API_URL?.replace(/\/$/, "") ||
   "http://127.0.0.1:3000";
 
-const BASE_URLS = [`${apiOrigin}/anime/gogoanime`];
+const GOGOANIME_BASE_URL = `${apiOrigin}/anime/gogoanime`;
+const KAIDO_BASE_URL = `${apiOrigin}/anime/kaido`;
 
 function normalizeText(value) {
   return String(value || "")
@@ -49,24 +50,15 @@ function findBestMatch(results, name) {
   })[0];
 }
 
-function handleConsumetResponse(endpoint, parameter) {
+function handleApiResponse(baseUrl, endpoint, parameter) {
   const results = useQuery(
-    `${endpoint}${parameter}`,
+    `${baseUrl}${endpoint}${parameter}`,
     async () => {
       if (!parameter) {
         return undefined;
       }
 
-      let lastError = null;
-      for (const baseUrl of BASE_URLS) {
-        try {
-          return await axios.get(`${baseUrl}${endpoint}${parameter}`);
-        } catch (error) {
-          lastError = error;
-        }
-      }
-
-      throw lastError;
+      return axios.get(`${baseUrl}${endpoint}${parameter}`);
     },
     {
       retry: false,
@@ -98,7 +90,11 @@ export function useSearch(name) {
   }
 
   const normalizedName = encodeURIComponent(name.toLowerCase());
-  const searchResults = handleConsumetResponse("/", normalizedName);
+  const searchResults = handleApiResponse(
+    GOGOANIME_BASE_URL,
+    "/",
+    normalizedName
+  );
   const results = searchResults.data?.results;
 
   if (!results) {
@@ -123,31 +119,34 @@ export function useSearch(name) {
 }
 
 export function useAnimeInfo(id) {
-  const results = handleConsumetResponse(`/info/`, id);
+  const results = handleApiResponse(GOGOANIME_BASE_URL, `/info/`, id);
   if (!results.isLoading && results.data) {
     return results.data;
   }
 }
 export function useServers({ episodeId, subOrDub }) {
-  const results = handleConsumetResponse(
+  const results = handleApiResponse(
+    KAIDO_BASE_URL,
     `/servers/`,
-    episodeId ? `${episodeId}?subOrDub=${subOrDub}` : null
+    episodeId ? episodeId : null
   );
 
   if (!results.isLoading && results.data) {
-    return results.data;
+    return results.data.servers?.filter((server) => server.type === subOrDub);
   }
 }
 
-export function useEpisodeFiles({ server, id, subOrDub }) {
-  const results = handleConsumetResponse(
-    "/watch/",
-    server && id ? `${id}?server=${encodeURIComponent(server.id)}&subOrDub=${subOrDub}` : null
+export function useEpisodeFiles({ id, subOrDub }) {
+  const results = handleApiResponse(
+    KAIDO_BASE_URL,
+    "/watch-by-episode/",
+    id ? `${id}?type=${subOrDub}` : null
   );
   if (!results.isLoading && results.data) {
     return {
       sources: results.data.sources,
       headers: results.data.headers,
+      server: results.data.server,
       isLoading: results.isLoading,
     };
   } else {

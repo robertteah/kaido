@@ -25,6 +25,8 @@ const app = express();
 const port = Number(process.env.PORT || 3000);
 const host = process.env.HOST || (process.env.PORT ? "0.0.0.0" : "127.0.0.1");
 const animeProvider = new ANIME.AnimeKai();
+const browserUserAgent =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
 const allowedOrigins = String(process.env.FRONTEND_ORIGIN || "")
   .split(",")
   .map((origin) => origin.trim())
@@ -59,17 +61,21 @@ function getPublicOrigin(req) {
   return `${protocol}://${req.get("host")}`;
 }
 
-function buildProxyUrl(req, url, referer) {
+function buildProxyUrl(req, url, referer, origin) {
   const params = new URLSearchParams({ url });
 
   if (referer) {
     params.set("referer", referer);
   }
 
+  if (origin) {
+    params.set("origin", origin);
+  }
+
   return `${getPublicOrigin(req)}/anime/gogoanime/proxy-stream?${params.toString()}`;
 }
 
-function rewritePlaylist(req, content, playlistUrl, referer) {
+function rewritePlaylist(req, content, playlistUrl, referer, origin) {
   return content
     .split("\n")
     .map((line) => {
@@ -80,7 +86,7 @@ function rewritePlaylist(req, content, playlistUrl, referer) {
       if (line.startsWith("#EXT-X-KEY") && line.includes('URI="')) {
         return line.replace(/URI="([^"]+)"/, (_match, uri) => {
           const absoluteUrl = new URL(uri, playlistUrl).toString();
-          return `URI="${buildProxyUrl(req, absoluteUrl, referer)}"`;
+          return `URI="${buildProxyUrl(req, absoluteUrl, referer, origin)}"`;
         });
       }
 
@@ -89,9 +95,118 @@ function rewritePlaylist(req, content, playlistUrl, referer) {
       }
 
       const absoluteUrl = new URL(line, playlistUrl).toString();
-      return buildProxyUrl(req, absoluteUrl, referer);
+      return buildProxyUrl(req, absoluteUrl, referer, origin);
     })
     .join("\n");
+}
+
+function createRequestHeaders(headers = {}) {
+  return {
+    "user-agent": browserUserAgent,
+    accept: "*/*",
+    ...headers,
+  };
+}
+
+function buildRapidCloudStreamHeaders(embedUrl) {
+  const origin = new URL(embedUrl).origin;
+  return {
+    Origin: origin,
+    Referer: `${origin}/`,
+  };
+}
+
+async function fetchJson(url, headers) {
+  const response = await fetch(url, {
+    headers: createRequestHeaders(headers),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request failed with status ${response.status} for ${url}`);
+  }
+
+  return response.json();
+}
+
+async function fetchText(url, headers) {
+  const response = await fetch(url, {
+    headers: createRequestHeaders(headers),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request failed with status ${response.status} for ${url}`);
+  }
+
+  return response.text();
+}
+
+function decodeEscapedContent(value) {
+  return String(value || "")
+    .replace(/\\u002F/gi, "/")
+    .replace(/\\u003A/gi, ":")
+    .replace(/\\u0026/gi, "&")
+    .replace(/\\\//g, "/")
+    .replace(/&amp;/gi, "&");
+}
+
+function extractM3u8Url(content) {
+  const decoded = decodeEscapedContent(content);
+  const patterns = [
+    /https?:\/\/[^\s"'\\]+\.m3u8[^\s"'\\]*/gi,
+    /file\s*:\s*["']([^"']+\.m3u8[^"']*)["']/gi,
+    /sources?\s*["']?\s*:\s*\[[\s\S]*?["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/gi,
+  ];
+
+  for (const pattern of patterns) {
+    const match = pattern.exec(decoded);
+    if (!match) {
+      continue;
+    }
+
+    const candidate = match[1] || match[0];
+    return candidate.replace(/^file\s*:\s*["']/, "").replace(/["']$/, "");
+  }
+
+  return null;
+}
+
+async function extractKaidoStream(sourceId) {
+  const ajaxUrl = `https://kaido.to/ajax/episode/sources?id=${encodeURIComponent(
+    sourceId
+  )}`;
+  const sourcePayload = await fetchJson(ajaxUrl, {
+    Referer: "https://kaido.to/",
+    "X-Requested-With": "XMLHttpRequest",
+    Accept: "application/json, text/plain, */*",
+  });
+
+  if (!sourcePayload?.link) {
+    throw new Error("Kaido source response did not include an embed link");
+  }
+
+  const embedUrl = sourcePayload.link;
+  const streamHeaders = buildRapidCloudStreamHeaders(embedUrl);
+  const embedHtml = await fetchText(embedUrl, {
+    Referer: "https://kaido.to/",
+  });
+
+  if (/file not found|we can't find the file/i.test(embedHtml)) {
+    throw new Error("Rapid-cloud embed returned a file-not-found page");
+  }
+
+  const streamUrl = extractM3u8Url(embedHtml);
+
+  if (!streamUrl) {
+    throw new Error("Failed to locate an m3u8 URL in the rapid-cloud embed");
+  }
+
+  return {
+    sourceId,
+    sourcePayload,
+    embedUrl,
+    streamUrl,
+    headers: streamHeaders,
+  };
 }
 
 app.use(
@@ -153,16 +268,20 @@ app.get("/anime/gogoanime/watch/:episodeId", async (req, res) => {
   try {
     const subOrDub = getSubOrDub(req.query.subOrDub);
     const data = await animeProvider.fetchEpisodeSources(
-      req.params.episodeId,
-      req.query.server,
-      subOrDub
+        req.params.episodeId,
+        req.query.server,
+        subOrDub
     );
     const referer = data.headers?.Referer || data.headers?.referer;
+    const origin = data.headers?.Origin || data.headers?.origin;
     res.json({
       ...data,
       sources: (data.sources || []).map((source, index) => ({
         ...source,
-        url: referer ? buildProxyUrl(req, source.url, referer) : source.url,
+        url:
+          referer || origin
+            ? buildProxyUrl(req, source.url, referer, origin)
+            : source.url,
         quality:
           source.quality ||
           (source.isM3U8 ? "auto" : `source-${String(index + 1)}`),
@@ -183,6 +302,7 @@ app.get("/anime/gogoanime/watch/:episodeId", async (req, res) => {
 app.get("/anime/gogoanime/proxy-stream", async (req, res) => {
   const url = String(req.query.url || "");
   const referer = String(req.query.referer || "");
+  const origin = String(req.query.origin || "");
 
   if (!url) {
     res.status(400).json({ message: "url is required" });
@@ -190,8 +310,16 @@ app.get("/anime/gogoanime/proxy-stream", async (req, res) => {
   }
 
   try {
+    const headers = {};
+    if (referer) {
+      headers.Referer = referer;
+    }
+    if (origin) {
+      headers.Origin = origin;
+    }
+
     const response = await fetch(url, {
-      headers: referer ? { Referer: referer } : {},
+      headers: createRequestHeaders(headers),
     });
 
     if (!response.ok) {
@@ -204,7 +332,7 @@ app.get("/anime/gogoanime/proxy-stream", async (req, res) => {
     if (contentType.includes("mpegurl") || url.includes(".m3u8")) {
       const playlist = await response.text();
       res.type("application/vnd.apple.mpegurl");
-      res.send(rewritePlaylist(req, playlist, url, referer));
+      res.send(rewritePlaylist(req, playlist, url, referer, origin));
       return;
     }
 
@@ -220,6 +348,43 @@ app.get("/anime/gogoanime/proxy-stream", async (req, res) => {
       details,
     });
     res.status(502).json({ message: "proxy failed", details });
+  }
+});
+
+app.get("/anime/kaido/watch/:sourceId", async (req, res) => {
+  try {
+    const extracted = await extractKaidoStream(req.params.sourceId);
+    const shouldProxy = String(req.query.proxy || "true").toLowerCase() !== "false";
+    const proxiedUrl = shouldProxy
+      ? buildProxyUrl(
+          req,
+          extracted.streamUrl,
+          extracted.headers.Referer,
+          extracted.headers.Origin
+        )
+      : extracted.streamUrl;
+
+    res.json({
+      sourceId: extracted.sourceId,
+      server: extracted.sourcePayload?.server ?? null,
+      type: extracted.sourcePayload?.type ?? null,
+      embed: extracted.embedUrl,
+      headers: extracted.headers,
+      sources: [
+        {
+          url: proxiedUrl,
+          quality: "auto",
+          isM3U8: true,
+        },
+      ],
+    });
+  } catch (error) {
+    const details = serializeError(error);
+    console.error("Kaido extractor failed", {
+      sourceId: req.params.sourceId,
+      details,
+    });
+    res.status(502).json({ message: "kaido extractor failed", details });
   }
 });
 

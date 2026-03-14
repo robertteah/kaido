@@ -52,6 +52,16 @@ function serializeError(error) {
   };
 }
 
+function decodeHtmlEntities(value) {
+  return String(value || "")
+    .replace(/&#(\d+);/g, (_match, code) => String.fromCharCode(Number(code)))
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+}
+
 function getPublicOrigin(req) {
   if (process.env.PUBLIC_URL) {
     return process.env.PUBLIC_URL.replace(/\/$/, "");
@@ -171,7 +181,39 @@ function extractM3u8Url(content) {
 }
 
 function stripHtml(value) {
-  return String(value || "").replace(/<[^>]+>/g, "").trim();
+  return decodeHtmlEntities(String(value || "").replace(/<[^>]+>/g, "").trim());
+}
+
+function normalizeKaidoPath(pathname) {
+  return String(pathname || "")
+    .replace(/^\/+/, "")
+    .replace(/\?.*$/, "")
+    .trim();
+}
+
+function parseKaidoSearchResults(html) {
+  const matches = [
+    ...String(html || "").matchAll(
+      /<div class="flw-item">[\s\S]*?<img[^>]*data-src="([^"]+)"[\s\S]*?<a href="([^"]+)"[^>]*title="([^"]+)"[^>]*data-id="(\d+)"[\s\S]*?<h3 class="film-name"><a [^>]*data-jname="([^"]*)"[^>]*>([\s\S]*?)<\/a>/g
+    ),
+  ];
+
+  return matches.map((match) => {
+    const block = match[0];
+    const subMatch = block.match(/tick-sub[^>]*><i[\s\S]*?<\/i>(\d+)/);
+    const dubMatch = block.match(/tick-dub[^>]*><i[\s\S]*?<\/i>(\d+)/);
+
+    return {
+      id: normalizeKaidoPath(match[2]),
+      title: stripHtml(match[6] || match[3]),
+      japaneseTitle: decodeHtmlEntities(match[5] || ""),
+      title_english: stripHtml(match[6] || match[3]),
+      title_romaji: decodeHtmlEntities(match[5] || ""),
+      image: match[1],
+      sub: Number(subMatch?.[1] || 0),
+      dub: Number(dubMatch?.[1] || 0),
+    };
+  });
 }
 
 function parseKaidoServers(html) {
@@ -209,6 +251,79 @@ async function fetchKaidoServers(episodeId) {
   }
 
   return servers;
+}
+
+async function searchKaido(query) {
+  const url = `https://kaido.to/search?keyword=${encodeURIComponent(query)}`;
+  const html = await fetchText(url);
+  return {
+    currentPage: 1,
+    hasNextPage: false,
+    results: parseKaidoSearchResults(html),
+  };
+}
+
+function parseKaidoEpisodes(html, slugId) {
+  const basePath = `/watch/${slugId}`;
+  const matches = [
+    ...String(html || "").matchAll(
+      /<a href="([^"]*\/watch\/[^"]+\?ep=(\d+)[^"]*)"[^>]*>\s*<div class="number">(\d+)<\/div>\s*<div class="ep-name[^"]*">([\s\S]*?)<\/div>/g
+    ),
+  ];
+
+  return matches.map((match) => ({
+    id: match[2],
+    number: Number(match[3]),
+    title: stripHtml(match[4]),
+    url: match[1].startsWith("http")
+      ? match[1]
+      : `https://kaido.to${match[1]}`,
+  }));
+}
+
+function extractKaidoInfoField(html, label) {
+  const pattern = new RegExp(
+    `<span class="item-head">${label}:<\\/span>\\s*<span class="name">([\\s\\S]*?)<\\/span>`,
+    "i"
+  );
+  return stripHtml(html.match(pattern)?.[1] || "");
+}
+
+async function fetchKaidoInfo(id) {
+  const slugId = normalizeKaidoPath(id);
+  const watchUrl = `https://kaido.to/watch/${slugId}`;
+  const response = await fetch(watchUrl, {
+    headers: createRequestHeaders(),
+    redirect: "follow",
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request failed with status ${response.status} for ${watchUrl}`);
+  }
+
+  const html = await response.text();
+  const title =
+    stripHtml(
+      html.match(/<h2 class="film-name dynamic-name"[^>]*>([\s\S]*?)<\/h2>/i)?.[1]
+    ) || slugId;
+  const japaneseTitle = extractKaidoInfoField(html, "Japanese");
+  const description = stripHtml(
+    html.match(/<div class="film-description[^"]*">\s*<div class="text">([\s\S]*?)<\/div>/i)?.[1]
+  );
+  const image =
+    html.match(/<img[^>]*class="film-poster-img"[^>]*src="([^"]+)"/i)?.[1] ||
+    html.match(/<img[^>]*src="([^"]+)"[^>]*alt="[^"]*"/i)?.[1] ||
+    "";
+  const episodes = parseKaidoEpisodes(html, slugId);
+
+  return {
+    id: slugId,
+    title,
+    japaneseTitle,
+    description,
+    image,
+    episodes,
+  };
 }
 
 async function extractKaidoStream(sourceId) {
@@ -303,12 +418,19 @@ app.get("/anime/gogoanime/info/:id", async (req, res) => {
     const data = await animeProvider.fetchAnimeInfo(req.params.id);
     res.json(data);
   } catch (error) {
-    const details = serializeError(error);
-    console.error("Consumet info failed", {
-      id: req.params.id,
-      details,
-    });
-    res.status(502).json({ message: "info failed", details });
+    try {
+      const data = await fetchKaidoInfo(req.params.id);
+      res.json(data);
+    } catch (fallbackError) {
+      const details = serializeError(error);
+      const fallbackDetails = serializeError(fallbackError);
+      console.error("Consumet info failed", {
+        id: req.params.id,
+        details,
+        fallbackDetails,
+      });
+      res.status(502).json({ message: "info failed", details, fallbackDetails });
+    }
   }
 });
 
@@ -528,12 +650,19 @@ app.get("/anime/gogoanime/:query", async (req, res) => {
     const data = await animeProvider.search(req.params.query);
     res.json(data);
   } catch (error) {
-    const details = serializeError(error);
-    console.error("Consumet search failed", {
-      query: req.params.query,
-      details,
-    });
-    res.status(502).json({ message: "search failed", details });
+    try {
+      const data = await searchKaido(req.params.query);
+      res.json(data);
+    } catch (fallbackError) {
+      const details = serializeError(error);
+      const fallbackDetails = serializeError(fallbackError);
+      console.error("Consumet search failed", {
+        query: req.params.query,
+        details,
+        fallbackDetails,
+      });
+      res.status(502).json({ message: "search failed", details, fallbackDetails });
+    }
   }
 });
 

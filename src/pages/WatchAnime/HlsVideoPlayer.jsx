@@ -2,11 +2,25 @@ import React, { useEffect, useRef } from "react";
 import Hls from "hls.js";
 export default function HlsVideoPlayer({ url, headers }) {
   const videoRef = useRef(null);
+  const proxyOrigin =
+    import.meta.env.VITE_PROXY_URL?.replace(/\/$/, "") || "";
+  const referer = headers?.Referer || headers?.referer || "";
+  const playbackUrl =
+    proxyOrigin && url && referer
+      ? `${proxyOrigin}/m3u8-proxy?url=${encodeURIComponent(
+          url
+        )}&referer=${encodeURIComponent(referer)}`
+      : url;
+
   useEffect(() => {
+    if (!playbackUrl) {
+      return undefined;
+    }
+
     // Check if HLS.js is supported in the current browser
     if (Hls.isSupported()) {
       const hls = new Hls();
-      hls.loadSource(url);
+      hls.loadSource(playbackUrl);
       hls.attachMedia(videoRef.current);
 
       // Listen for HLS events (optional)
@@ -19,7 +33,7 @@ export default function HlsVideoPlayer({ url, headers }) {
       // Neither HLS.js nor native HLS support is available
       console.error("HLS is not supported in this browser.");
     }
-  }, [url]);
+  }, [playbackUrl]);
   // full-screnn added
     const toggleFullScreen = () => {
     if (!document.fullscreenElement) {

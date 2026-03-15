@@ -4,6 +4,8 @@ import { useQuery } from "react-query";
 const apiOrigin =
   import.meta.env.VITE_CONSUMET_API_URL?.replace(/\/$/, "") ||
   "http://127.0.0.1:3000";
+const externalProxyOrigin =
+  import.meta.env.VITE_PROXY_URL?.replace(/\/$/, "") || "";
 
 const GOGOANIME_BASE_URL = `${apiOrigin}/anime/gogoanime`;
 const KAIDO_BASE_URL = `${apiOrigin}/anime/kaido`;
@@ -162,10 +164,15 @@ export function useServers({ episodeId, subOrDub }) {
 
 export function useEpisodeFiles({ id, subOrDub }) {
   const normalizedEpisodeId = normalizeEpisodeId(id);
+  const playbackQuery = normalizedEpisodeId
+    ? `${normalizedEpisodeId}?type=${subOrDub}${
+        externalProxyOrigin ? "&proxy=false" : ""
+      }`
+    : null;
   const results = handleApiResponse(
     KAIDO_BASE_URL,
     "/watch-by-episode/",
-    normalizedEpisodeId ? `${normalizedEpisodeId}?type=${subOrDub}` : null
+    playbackQuery
   );
   if (!results.isLoading && results.data) {
     return {

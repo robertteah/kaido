@@ -6,7 +6,6 @@ const apiOrigin =
   "http://127.0.0.1:3000";
 
 const GOGOANIME_BASE_URL = `${apiOrigin}/anime/gogoanime`;
-const KAIDO_BASE_URL = `${apiOrigin}/anime/kaido`;
 
 function normalizeText(value) {
   return String(value || "")
@@ -126,21 +125,21 @@ export function useAnimeInfo(id) {
 }
 export function useServers({ episodeId, subOrDub }) {
   const results = handleApiResponse(
-    KAIDO_BASE_URL,
+    GOGOANIME_BASE_URL,
     `/servers/`,
-    episodeId ? episodeId : null
+    episodeId ? `${episodeId}?subOrDub=${subOrDub}` : null
   );
 
   if (!results.isLoading && results.data) {
-    return results.data.servers?.filter((server) => server.type === subOrDub);
+    return results.data.servers;
   }
 }
 
 export function useEpisodeFiles({ id, subOrDub }) {
   const results = handleApiResponse(
-    KAIDO_BASE_URL,
-    "/watch-by-episode/",
-    id ? `${id}?type=${subOrDub}` : null
+    GOGOANIME_BASE_URL,
+    "/watch/",
+    id ? `${id}?subOrDub=${subOrDub}` : null
   );
   if (!results.isLoading && results.data) {
     return {

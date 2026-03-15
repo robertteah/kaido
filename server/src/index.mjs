@@ -5,6 +5,7 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { ANIME, SubOrSub } from "@consumet/extensions";
+import { HiAnime } from "@dovakiin0/aniwatch";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const serverRoot = path.resolve(__dirname, "..");
@@ -25,12 +26,43 @@ const app = express();
 const port = Number(process.env.PORT || 3000);
 const host = process.env.HOST || (process.env.PORT ? "0.0.0.0" : "127.0.0.1");
 const animeProvider = new ANIME.AnimeKai();
+const hiAnimeProvider = new HiAnime.Scraper();
 const browserUserAgent =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
-const allowedOrigins = String(process.env.FRONTEND_ORIGIN || "")
-  .split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+
+function expandAllowedOrigins(origins) {
+  const expanded = new Set();
+
+  for (const origin of origins) {
+    if (!origin) {
+      continue;
+    }
+
+    expanded.add(origin);
+
+    try {
+      const url = new URL(origin);
+      if (url.hostname === "127.0.0.1") {
+        url.hostname = "localhost";
+        expanded.add(url.toString().replace(/\/$/, ""));
+      } else if (url.hostname === "localhost") {
+        url.hostname = "127.0.0.1";
+        expanded.add(url.toString().replace(/\/$/, ""));
+      }
+    } catch {
+      // Ignore invalid origins and leave validation to the explicit entries.
+    }
+  }
+
+  return [...expanded];
+}
+
+const allowedOrigins = expandAllowedOrigins(
+  String(process.env.FRONTEND_ORIGIN || "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+);
 
 function getSubOrDub(value) {
   return String(value || "sub").toLowerCase() === "dub"
@@ -189,6 +221,149 @@ function normalizeKaidoPath(pathname) {
     .replace(/^\/+/, "")
     .replace(/\?.*$/, "")
     .trim();
+}
+
+function normalizeHiAnimeId(value) {
+  return String(value || "").replace(/^https?:\/\/[^/]+\/watch\//, "").trim();
+}
+
+function mapHiAnimeSearchResult(anime) {
+  return {
+    id: anime?.id || "",
+    title: anime?.name || "",
+    japaneseTitle: anime?.jname || "",
+    title_english: anime?.name || "",
+    title_romaji: anime?.jname || "",
+    image: anime?.poster || "",
+    sub: Number(anime?.episodes?.sub || 0),
+    dub: Number(anime?.episodes?.dub || 0),
+  };
+}
+
+function mapHiAnimeEpisode(episode) {
+  return {
+    id: normalizeHiAnimeId(episode?.episodeId),
+    number: Number(episode?.number || 0),
+    title: episode?.title || `Episode ${episode?.number || ""}`.trim(),
+    japaneseTitle: episode?.title || "",
+    url: episode?.episodeId
+      ? `https://hianime.to/watch/${normalizeHiAnimeId(episode.episodeId)}`
+      : "",
+  };
+}
+
+function mapHiAnimeServers(data, category) {
+  return (data?.[category] || []).map((server) => ({
+    id: server?.serverName || "",
+    name: server?.serverName || "",
+    serverId: server?.serverId ?? null,
+    type: category,
+  }));
+}
+
+async function searchHiAnime(query) {
+  const data = await hiAnimeProvider.search(String(query || ""));
+
+  return {
+    currentPage: data?.currentPage || 1,
+    hasNextPage: Boolean(data?.hasNextPage),
+    results: (data?.animes || []).map(mapHiAnimeSearchResult),
+  };
+}
+
+async function fetchHiAnimeInfo(id) {
+  const animeId = normalizeHiAnimeId(id);
+  const [info, episodes] = await Promise.all([
+    hiAnimeProvider.getInfo(animeId),
+    hiAnimeProvider.getEpisodes(animeId),
+  ]);
+
+  return {
+    id: info?.anime?.info?.id || animeId,
+    title: info?.anime?.info?.name || animeId,
+    japaneseTitle: info?.anime?.info?.jname || "",
+    description: info?.anime?.info?.description || "",
+    image: info?.anime?.info?.poster || "",
+    episodes: (episodes?.episodes || []).map(mapHiAnimeEpisode),
+  };
+}
+
+async function fetchHiAnimeServers(episodeId, preferredCategory) {
+  const animeEpisodeId = normalizeHiAnimeId(episodeId);
+  const data = await hiAnimeProvider.getEpisodeServers(animeEpisodeId);
+  const normalizedCategory =
+    String(preferredCategory || "sub").toLowerCase() === "dub" ? "dub" : "sub";
+
+  const availableCategory =
+    data?.[normalizedCategory]?.length > 0
+      ? normalizedCategory
+      : data?.sub?.length > 0
+      ? "sub"
+      : data?.dub?.length > 0
+      ? "dub"
+      : data?.raw?.length > 0
+      ? "raw"
+      : normalizedCategory;
+
+  return {
+    episodeId: data?.episodeId || animeEpisodeId,
+    episodeNo: data?.episodeNo || null,
+    category: availableCategory,
+    servers: mapHiAnimeServers(data, availableCategory),
+  };
+}
+
+async function fetchHiAnimeWatch(episodeId, preferredCategory, preferredServer) {
+  const animeEpisodeId = normalizeHiAnimeId(episodeId);
+  const servers = await hiAnimeProvider.getEpisodeServers(animeEpisodeId);
+  const normalizedCategory =
+    String(preferredCategory || "sub").toLowerCase() === "dub" ? "dub" : "sub";
+
+  const availableCategory =
+    servers?.[normalizedCategory]?.length > 0
+      ? normalizedCategory
+      : servers?.sub?.length > 0
+      ? "sub"
+      : servers?.dub?.length > 0
+      ? "dub"
+      : servers?.raw?.length > 0
+      ? "raw"
+      : normalizedCategory;
+
+  const availableServers = servers?.[availableCategory] || [];
+  const resolvedServer =
+    availableServers.find((server) => server.serverName === preferredServer)
+      ?.serverName ||
+    availableServers[0]?.serverName;
+
+  let data;
+
+  try {
+    data = await hiAnimeProvider.getEpisodeSources(
+      animeEpisodeId,
+      resolvedServer,
+      availableCategory
+    );
+  } catch (error) {
+    if (!resolvedServer) {
+      throw error;
+    }
+
+    data = await hiAnimeProvider.getEpisodeSources(
+      animeEpisodeId,
+      undefined,
+      availableCategory
+    );
+  }
+
+  return {
+    data,
+    category: availableCategory,
+    server: availableServers.find((server) => server.serverName === resolvedServer) || {
+      serverName: resolvedServer || "",
+      serverId: null,
+    },
+  };
 }
 
 function parseKaidoSearchResults(html) {
@@ -460,7 +635,7 @@ app.get("/health", (_req, res) => {
 
 app.get("/anime/gogoanime/info/:id", async (req, res) => {
   try {
-    const data = await animeProvider.fetchAnimeInfo(req.params.id);
+    const data = await fetchHiAnimeInfo(req.params.id);
     res.json(data);
   } catch (error) {
     try {
@@ -481,17 +656,10 @@ app.get("/anime/gogoanime/info/:id", async (req, res) => {
 
 app.get("/anime/gogoanime/servers/:episodeId", async (req, res) => {
   try {
-    const subOrDub = getSubOrDub(req.query.subOrDub);
-    const data = await animeProvider.fetchEpisodeServers(
-      req.params.episodeId,
-      subOrDub
-    );
-    res.json(
-      data.map((server) => ({
-        ...server,
-        id: server.name,
-      }))
-    );
+    const category =
+      String(req.query.subOrDub || "sub").toLowerCase() === "dub" ? "dub" : "sub";
+    const data = await fetchHiAnimeServers(req.params.episodeId, category);
+    res.json(data);
   } catch (error) {
     const details = serializeError(error);
     console.error("Consumet servers failed", {
@@ -505,16 +673,24 @@ app.get("/anime/gogoanime/servers/:episodeId", async (req, res) => {
 
 app.get("/anime/gogoanime/watch/:episodeId", async (req, res) => {
   try {
-    const subOrDub = getSubOrDub(req.query.subOrDub);
-    const data = await animeProvider.fetchEpisodeSources(
-        req.params.episodeId,
-        req.query.server,
-        subOrDub
+    const subOrDub =
+      String(req.query.subOrDub || "sub").toLowerCase() === "dub" ? "dub" : "sub";
+    const extracted = await fetchHiAnimeWatch(
+      req.params.episodeId,
+      subOrDub,
+      req.query.server
     );
+    const data = extracted.data;
     const referer = data.headers?.Referer || data.headers?.referer;
     const origin = data.headers?.Origin || data.headers?.origin;
     res.json({
       ...data,
+      server: {
+        id: extracted.server?.serverName || "",
+        name: extracted.server?.serverName || "",
+        serverId: extracted.server?.serverId ?? null,
+        type: extracted.category,
+      },
       sources: (data.sources || []).map((source, index) => ({
         ...source,
         url:
@@ -692,7 +868,7 @@ app.get("/anime/kaido/watch-by-episode/:episodeId", async (req, res) => {
 
 app.get("/anime/gogoanime/:query", async (req, res) => {
   try {
-    const data = await animeProvider.search(req.params.query);
+    const data = await searchHiAnime(req.params.query);
     res.json(data);
   } catch (error) {
     try {

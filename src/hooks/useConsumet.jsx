@@ -50,6 +50,29 @@ function findBestMatch(results, name) {
   })[0];
 }
 
+function normalizeEpisodeId(value) {
+  const rawValue = String(value || "").trim();
+  if (!rawValue) {
+    return "";
+  }
+
+  try {
+    if (rawValue.startsWith("http://") || rawValue.startsWith("https://")) {
+      const url = new URL(rawValue);
+      return url.searchParams.get("ep") || rawValue;
+    }
+  } catch (_error) {
+    // Ignore invalid URLs and keep parsing as a plain string.
+  }
+
+  const queryIndex = rawValue.indexOf("?ep=");
+  if (queryIndex >= 0) {
+    return rawValue.slice(queryIndex + 4).split("&")[0];
+  }
+
+  return rawValue;
+}
+
 function handleApiResponse(baseUrl, endpoint, parameter) {
   const results = useQuery(
     `${baseUrl}${endpoint}${parameter}`,
@@ -125,10 +148,11 @@ export function useAnimeInfo(id) {
   }
 }
 export function useServers({ episodeId, subOrDub }) {
+  const normalizedEpisodeId = normalizeEpisodeId(episodeId);
   const results = handleApiResponse(
     KAIDO_BASE_URL,
     `/servers/`,
-    episodeId ? episodeId : null
+    normalizedEpisodeId || null
   );
 
   if (!results.isLoading && results.data) {
@@ -137,10 +161,11 @@ export function useServers({ episodeId, subOrDub }) {
 }
 
 export function useEpisodeFiles({ id, subOrDub }) {
+  const normalizedEpisodeId = normalizeEpisodeId(id);
   const results = handleApiResponse(
     KAIDO_BASE_URL,
     "/watch-by-episode/",
-    id ? `${id}?type=${subOrDub}` : null
+    normalizedEpisodeId ? `${normalizedEpisodeId}?type=${subOrDub}` : null
   );
   if (!results.isLoading && results.data) {
     return {
